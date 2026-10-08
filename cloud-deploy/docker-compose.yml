@@ -1,0 +1,119 @@
+# ============================================================
+# 共享中间件部署清单
+# 服务对象：antique 古玩 / ciTY Art / 恋爱小程序 / 以后的新项目
+#
+# 用法：
+#   1) 修改 .env 里的密码
+#   2) docker compose up -d                     # 日常：起 mysql + redis + rabbitmq
+#   3) docker compose --profile nacos up -d     # 需要微服务时：额外起 nacos
+#   4) docker compose stop nacos                # 用完停掉，释放内存
+#
+# 设计约定：
+#   - 容器名只描述「它是什么」（mysql/redis/rabbitmq/nacos），不带任何项目名
+#   - 项目隔离靠逻辑单位：MySQL 库 / Redis database 索引 / RabbitMQ vhost / Nacos namespace
+#   - Nacos 打了 profiles 标记，默认不启动（它约需 500M 内存，2G 机器按需开）
+#   - ES 不在本清单（至少需 1G 内存，留在本地跑）
+# ============================================================
+
+services:
+  # ---------- MySQL 8.0 ----------
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      # 2G 机器关键调优：缓冲池压到 256M
+      - --innodb-buffer-pool-size=256M
+      - --max-connections=200
+      - --skip-name-resolve
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./data/mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ---------- Redis 7 ----------
+  redis:
+    image: redis:7
+    container_name: redis
+    restart: unless-stopped
+    # requirepass 必开；maxmemory 96MB + allkeys-lru（token/验证码/签到都可淘汰）；
+    # appendonly 持久化，防止容器重启丢会话
+    command:
+      - redis-server
+      - --requirepass ${REDIS_PASSWORD}
+      - --maxmemory 96mb
+      - --maxmemory-policy allkeys-lru
+      - --appendonly yes
+      - --appendfsync everysec
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ---------- RabbitMQ 3.13 ----------
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+      RABBITMQ_DEFAULT_VHOST: /
+    ports:
+      - "5672:5672"    # AMQP 协议（程序连这个）
+      - "15672:15672"  # 管理台
+    volumes:
+      - ./data/rabbitmq:/var/lib/rabbitmq
+    # 2G 机器：限制 Erlang VM 内存。实测闲时只占约 125M
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ---------- Nacos 2.3（注册中心 + 配置中心）----------
+  # 默认不启动：它实际约需 500M 内存，是 2G 机器上最重的一个
+  # 启用：docker compose --profile nacos up -d
+  nacos:
+    image: nacos/nacos-server:v2.3.2
+    container_name: nacos
+    profiles: ["nacos"]
+    restart: unless-stopped
+    environment:
+      MODE: standalone          # 单机模式，用内嵌 Derby，不依赖 MySQL
+      JVM_XMS: 128m
+      JVM_XMX: 256m
+      JVM_XMN: 64m
+      NACOS_AUTH_ENABLE: "false"
+    ports:
+      - "8848:8848"
+    volumes:
+      - ./data/nacos:/home/nacos/data
+    # 关键修正：原来限 400M 太小 —— Nacos 的堆(256M)+元空间+线程栈+内嵌 Derby
+    # 总共约需 500M，被卡在 400M 会疯狂读盘(实测 BLOCK I/O 21GB)把 load 打到 15。
+    # 768M 给足余量，实测可稳定运行。
+    mem_limit: 768m
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8848/nacos/ >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s

@@ -10,6 +10,7 @@ import com.antique.exception.AuthException;
 import com.antique.mapper.AntiqueMapper;
 import com.antique.mapper.OrderItemMapper;
 import com.antique.mapper.OrderMapper;
+import com.antique.mq.BehaviorEventPublisher;
 import com.antique.service.MessageService;
 import com.antique.service.OrderService;
 import com.antique.util.OrderNoGenerator;
@@ -70,6 +71,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Orders> implement
     private final OrderItemMapper orderItemMapper;
     private final RDelayedQueue<Long> orderDelayQueue;
     private final MessageService messageService;
+    private final BehaviorEventPublisher behaviorEventPublisher;
 
     /**
      * 自注入代理：惰性检查需要调用本类事务方法 closeOrderByTimeout，
@@ -121,8 +123,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Orders> implement
         }
 
         // ----- 步骤 5：行级锁锁定藏品（物理兜底，防并发一物多卖） -----
-        // UPDATE antique SET status = 2 WHERE id = ? AND status = 1
         // 并发下单时仅第一个事务成功，后者影响行数 0 → 回滚返回"藏品已售出或正在交易中"
+        // UPDATE antique SET status = 2 WHERE id = ? AND status = 1
         if (antiqueMapper.lockAntique(dto.getAntiqueId()) == 0) {
             throw new AuthException(MessageConstant.ORDER_ANTIQUE_LOCKED);
         }
@@ -168,6 +170,9 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Orders> implement
                 } catch (Exception e) {
                     log.warn("订单延迟队列入队失败，交由定时任务兜底: orderId={}", orderId, e);
                 }
+
+                // 下单行为埋点（M1 行为流水）：事务提交后才发，避免统计到最终回滚的订单
+                behaviorEventPublisher.publishOrder(userId, dto.getAntiqueId());
             }
         });
 

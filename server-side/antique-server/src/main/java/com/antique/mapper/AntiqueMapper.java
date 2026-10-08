@@ -2,6 +2,7 @@ package com.antique.mapper;
 
 import com.antique.entity.Antique;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Update;
 
 /**
@@ -30,6 +31,19 @@ public interface AntiqueMapper extends BaseMapper<Antique> {
      */
     @Update("UPDATE antique SET view_count = view_count + 1 WHERE id = #{id}")
     int incrementViewCount(Long id);
+
+    /**
+     * 浏览次数批量累加（M1 行为流水：定时任务调用）
+     *
+     * <p>详情页不再每次浏览都写库，改为 MQ + Redis 聚合后每 5 分钟批量回写一次；
+     * 这个字段仍是"展示用的冗余计数"，日统计的权威数据在 daily_stats 表。
+     *
+     * @param id    藏品 ID
+     * @param delta 本次累加的浏览量（来自 Redis 聚合结果）
+     * @return 受影响行数
+     */
+    @Update("UPDATE antique SET view_count = view_count + #{delta} WHERE id = #{id}")
+    int addViewCount(@Param("id") Long id, @Param("delta") int delta);
 
     /**
      * 收藏数 +1（收藏接口调用）

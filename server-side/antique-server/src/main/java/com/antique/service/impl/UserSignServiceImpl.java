@@ -216,7 +216,6 @@ public class UserSignServiceImpl extends ServiceImpl<UserSignRecordMapper, UserS
             UserSignRecord record = new UserSignRecord();
             record.setUserId(userId);
             record.setSignDate(today);
-            record.setPointsEarned(reward);
             save(record);   // createTime 由 MyMetaObjectHandler 自动填充
         } catch (DuplicateKeyException e) {
             // 并发场景：两个请求同时通过 Redis 检查，唯一索引拦截了后到者

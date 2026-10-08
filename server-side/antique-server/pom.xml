@@ -49,6 +49,12 @@
             <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
 
+        <!-- RabbitMQ -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
+
         <!-- Redisson（分布式锁 + 延迟队列：订单超时自动取消） -->
         <dependency>
             <groupId>org.redisson</groupId>

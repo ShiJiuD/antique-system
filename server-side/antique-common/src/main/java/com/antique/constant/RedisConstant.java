@@ -37,6 +37,14 @@ public class RedisConstant {
     /** 订单超时延迟队列 Key（Redisson RDelayedQueue，元素 = orderId，16 分钟后到期投递） */
     public static final String KEY_ORDER_DELAY_QUEUE = "delay:order-close";
 
+    /**
+     * 行为统计计数 Key 前缀（M1 行为流水）
+     *
+     * <p>完整 Key = {@code stats:{antiqueId}:{yyyyMMdd}:{visit|order}}，值为当日累计次数。
+     * 由消费者 INCR 累加、定时任务读取并删除后落库到 daily_stats 表。
+     */
+    public static final String KEY_STATS_PREFIX = "stats:";
+
     // ==================== 过期时间（秒） ====================
 
     /** Token 过期时间：7 天 = 60×60×24×7 */

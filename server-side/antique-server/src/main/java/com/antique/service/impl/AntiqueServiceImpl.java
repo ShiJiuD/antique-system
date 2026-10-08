@@ -8,6 +8,7 @@ import com.antique.entity.Favorite;
 import com.antique.exception.AuthException;
 import com.antique.mapper.AntiqueMapper;
 import com.antique.mapper.FavoriteMapper;
+import com.antique.mq.BehaviorEventPublisher;
 import com.antique.service.AntiqueService;
 import com.antique.util.PageUtil;
 import com.antique.vo.AntiqueCardVO;
@@ -48,6 +49,7 @@ public class AntiqueServiceImpl extends ServiceImpl<AntiqueMapper, Antique> impl
 
     private final AntiqueMapper antiqueMapper;
     private final FavoriteMapper favoriteMapper;
+    private final BehaviorEventPublisher behaviorEventPublisher;
 
     // ========================================================================
     //  接口 1：获取藏品列表
@@ -119,9 +121,10 @@ public class AntiqueServiceImpl extends ServiceImpl<AntiqueMapper, Antique> impl
             isFavorited = favoriteMapper.selectCount(favoriteWrapper) > 0;
         }
 
-        // ----- 步骤 3：浏览次数 +1 -----
-        // 原子自增（UPDATE view_count = view_count + 1），避免并发覆盖
-        antiqueMapper.incrementViewCount(id);
+        // ----- 步骤 3：浏览行为埋点（M1 行为流水）-----
+        // 改造前：antiqueMapper.incrementViewCount(id) —— 每次浏览都写一次数据库（热点行写）
+        // 改造后：只发一条 MQ 消息，消费者累加到 Redis，定时任务每 5 分钟批量落库
+        behaviorEventPublisher.publishVisit(userId, id);
 
         // ----- 步骤 4：组装详情 VO -----
         AntiqueDetailVO vo = BeanUtil.copyProperties(antique, AntiqueDetailVO.class);
