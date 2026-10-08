@@ -29,6 +29,24 @@ spring:
           max-idle: 8
           min-idle: 4
 
+  # ===== RabbitMQ（M1 行为流水埋点）=====
+  # 本地开发建议走 SSH 隧道连云端：host=127.0.0.1，port=隧道映射端口（如 25672 → 云端 5672）
+  rabbitmq:
+    host: 127.0.0.1
+    port: 5672
+    username: your_rabbitmq_user
+    password: your_rabbitmq_password
+    virtual-host: /
+    # 发布确认：消息到达交换机/队列的回调（可靠投递基础）
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    listener:
+      simple:
+        acknowledge-mode: manual   # 手动 ack（默认是 auto，必须改）
+        prefetch: 20               # 每次预取 20 条，防止消费者被压垮
+        retry:
+          enabled: false           # 重试交给死信队列处理
+
   profiles:
     active: dev
 
@@ -79,3 +97,10 @@ antique:
 ai:
   python:
     url: http://127.0.0.1:8001
+
+# 销量预测服务（Python 服务地址，algorithm-side 的 FastAPI 服务）
+# M1 行为流水的下游：读取 daily_stats 近 7 天数据，返回未来 7 天预测；
+# 服务未启动时接口自动降级（predictAvailable=false），不影响统计查询本身
+algorithm:
+  python:
+    url: http://127.0.0.1:8002
