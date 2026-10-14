@@ -40,4 +40,13 @@ public class AntiqueCardVO implements Serializable {
 
     /** 是否热门：0-否，1-是 */
     private Integer isHot;
+
+    /**
+     * 高亮后的标题（仅 ES 搜索接口返回，其他接口为 null）
+     *
+     * <p>命中关键词的部分会被 {@code <em>} 标签包裹，例如：
+     * {@code <em>青花瓷</em>瓶 清代官窑精品}。
+     * 列表 / 收藏等非搜索场景不设置此字段（保持 null，前端回退用普通 title）。
+     */
+    private String highlightTitle;
 }

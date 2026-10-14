@@ -165,8 +165,34 @@ public class MessageConstant {
     /** 下单成功消息内容模板（%s = 订单号，由 Service 用 String.format 填充） */
     public static final String MESSAGE_ORDER_CREATED = "您的订单 %s 已创建成功，请尽快完成支付";
 
+    /** 支付成功消息内容模板（%s = 订单号）—— M3 事件驱动后新增 */
+    public static final String MESSAGE_ORDER_PAID = "您的订单 %s 已支付成功，等待卖家发货";
+
+    /**
+     * 订单关闭消息内容模板（%s = 订单号）—— M3 新增
+     *
+     * <p>用户主动取消和超时未支付关单共用一个模板：
+     * 对买家来说结果一样（订单关了、藏品重新上架），没必要让前端文案分叉。
+     */
+    public static final String MESSAGE_ORDER_CLOSED = "您的订单 %s 已关闭";
+
+    /** 确认收货消息内容模板（%s = 订单号）—— M3 新增 */
+    public static final String MESSAGE_ORDER_RECEIVED = "您的订单 %s 已确认收货，感谢您的购买";
+
     // ==================== AI 助手相关 ====================
 
     /** AI 服务不可用（Python 服务未启动/超时/异常时兜底提示） */
     public static final String AI_SERVICE_UNAVAILABLE = "AI服务暂时不可用，请稍后重试";
+
+    // ==================== ES 搜索相关（M2）====================
+
+    /**
+     * ES 索引不存在
+     *
+     * <p>必须先用 server-side/es/antique-index.json 建好索引再同步；
+     * 否则 ES 会自动创建一个「动态推断 mapping」的索引 —— 不报错，
+     * 但中文会被切成单字、字段类型也未必正确，属于最难排查的静默错误。
+     */
+    public static final String ES_INDEX_NOT_EXISTS =
+            "ES 索引不存在，请先执行 server-side/es/antique-index.json 创建索引（详见 server-side/es/README.md）";
 }

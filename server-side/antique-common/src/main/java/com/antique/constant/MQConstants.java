@@ -51,4 +51,63 @@ public class MQConstants {
 
     /** 死信路由键 */
     public static final String BEHAVIOR_DLX_KEY = "behavior.dlx";
+
+    // ==================== 订单事件总线（M3）====================
+
+    /**
+     * 订单事件交换机（topic 类型）
+     *
+     * <p>为什么用 topic 而不是 direct/fanout：一个订单事件会有<b>多个消费方</b>
+     * （当前是消息中心，将来可能有短信、数据仓库、风控），
+     * topic + "一个事件一个路由键"能让新消费方自己绑定队列接入，
+     * <b>订单代码一行都不用改</b> —— 这是事件驱动架构的核心收益。
+     */
+    public static final String ORDER_EVENT_EXCHANGE = "order.event.exchange";
+
+    /** 订单事件队列（消息中心消费它：写站内信 + WebSocket 推送） */
+    public static final String ORDER_EVENT_QUEUE = "order.event.queue";
+
+    /** 路由键：订单创建 */
+    public static final String ORDER_CREATED_KEY = "order.created";
+
+    /** 路由键：订单支付成功 */
+    public static final String ORDER_PAID_KEY = "order.paid";
+
+    /** 路由键：订单关闭（用户主动取消 / 超时未支付关单，两者语义相同） */
+    public static final String ORDER_CLOSED_KEY = "order.closed";
+
+    /** 路由键：订单确认收货 */
+    public static final String ORDER_RECEIVED_KEY = "order.received";
+
+    // ==================== 订单事件类型（写入 outbox.event_type）====================
+    // 路由键用于 MQ 投递，事件类型用于落库与消费端分支判断。
+    // 两者一一对应，都定义在这里，避免"库里的类型"和"MQ 的路由键"对不上。
+
+    /** 事件类型：订单创建 */
+    public static final String EVENT_ORDER_CREATED = "ORDER_CREATED";
+
+    /** 事件类型：订单支付成功 */
+    public static final String EVENT_ORDER_PAID = "ORDER_PAID";
+
+    /** 事件类型：订单关闭（取消 / 超时） */
+    public static final String EVENT_ORDER_CLOSED = "ORDER_CLOSED";
+
+    /** 事件类型：订单收货 */
+    public static final String EVENT_ORDER_RECEIVED = "ORDER_RECEIVED";
+
+    // ==================== 订单事件的死信通道 ====================
+
+    /**
+     * 订单事件死信交换机（direct 类型）
+     *
+     * <p>与 M1 的设计口径一致：<b>重试耗尽才进死信</b>，死信队列没有消费者，
+     * 消息留在那里等人工排查（它不是垃圾桶，是"需要人看一眼"的入口）。
+     */
+    public static final String ORDER_EVENT_DLX_EXCHANGE = "order.event.dlx.exchange";
+
+    /** 订单事件死信队列 */
+    public static final String ORDER_EVENT_DLX_QUEUE = "order.event.dlx.queue";
+
+    /** 订单事件死信路由键 */
+    public static final String ORDER_EVENT_DLX_KEY = "order.event.dlx";
 }

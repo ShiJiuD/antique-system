@@ -55,6 +55,19 @@
             <artifactId>spring-boot-starter-amqp</artifactId>
         </dependency>
 
+        <!-- ===== M5 微服务 ===== -->
+        <!-- Nacos 服务发现：主服务注册上去，才能按服务名发现 antique-search -->
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>
+        </dependency>
+        <!-- OpenFeign：声明式服务间调用 -->
+        <!-- 用在两处：① 搜索请求转给搜索服务；② 详情页取"相关推荐" -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-openfeign</artifactId>
+        </dependency>
+
         <!-- Redisson（分布式锁 + 延迟队列：订单超时自动取消） -->
         <dependency>
             <groupId>org.redisson</groupId>

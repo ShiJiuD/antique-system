@@ -41,6 +41,18 @@ public class Message implements Serializable {
     /** 消息类型：1-系统通知，2-订单消息，3-AI助手（预留） */
     private Integer type;
 
+    /**
+     * 来源事件 ID（M3 幂等键）
+     *
+     * <p>数据库上有唯一索引 {@code uk_event_id}。MQ 是"至少一次"投递，
+     * 同一个订单事件可能被消费多次；靠这个字段，第二次插入会抛
+     * {@code DuplicateKeyException}，消费者捕获后正常 ack，用户不会收到两条一样的站内信。
+     *
+     * <p>为 NULL 表示这条消息不是事件驱动的（如系统公告），
+     * MySQL 唯一索引允许多个 NULL，所以不受影响。
+     */
+    private String eventId;
+
     /** 标题（前端分组展示，如"订单消息"） */
     private String title;
 

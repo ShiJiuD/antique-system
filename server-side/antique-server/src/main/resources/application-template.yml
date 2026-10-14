@@ -37,15 +37,42 @@ spring:
     username: your_rabbitmq_user
     password: your_rabbitmq_password
     virtual-host: /
-    # 发布确认：消息到达交换机/队列的回调（可靠投递基础）
-    publisher-confirm-type: correlated
-    publisher-returns: true
+    # ===== 发布确认（可靠投递基础）=====
+    publisher-confirm-type: correlated   # 消息是否到达交换机的异步回调
+    publisher-returns: true              # 路由失败时把消息退回（需配合下面的 mandatory）
+    template:
+      # ⚠️ 必须为 true：否则「消息到了交换机但没路由到队列」时不会触发 ReturnsCallback，
+      #    消息会被静默丢弃 —— 只开 publisher-returns 是不够的
+      mandatory: true
     listener:
       simple:
         acknowledge-mode: manual   # 手动 ack（默认是 auto，必须改）
         prefetch: 20               # 每次预取 20 条，防止消费者被压垮
         retry:
           enabled: false           # 重试交给死信队列处理
+
+  # ===== Nacos 服务发现（M5 微服务）=====
+  # 主服务注册到 Nacos，才能按服务名发现 antique-search；
+  # 服务名必须与搜索服务的 spring.application.name 完全一致
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 192.168.25.100:8848
+
+    # ===== OpenFeign 客户端配置（M5）=====
+    # 按被调服务分别配超时；Feign 默认是 connect 10s / read 60s，对多数接口都太长
+    openfeign:
+      client:
+        config:
+          antique-search:            # 搜索服务（ES 查询）
+            connectTimeout: 2000
+            readTimeout: 5000
+          ai-service:                # Python ai-side（LLM 生成，慢）
+            connectTimeout: 5000
+            readTimeout: 60000
+          algorithm-service:         # Python algorithm-side（本地预测，快）
+            connectTimeout: 3000
+            readTimeout: 3000
 
   profiles:
     active: dev
@@ -104,3 +131,11 @@ ai:
 algorithm:
   python:
     url: http://127.0.0.1:8002
+
+# Elasticsearch（M2 搜索）
+# 建议跑在本地虚拟机/本机 Docker 上并配静态 IP，避免地址漂移：
+#   Docker：docker run -d --name es -p 9200:9200 -e "discovery.type=single-node" \
+#             -e "ES_JAVA_OPTS=-Xms512m -Xmx512m" elasticsearch:7.12.1
+# 中文检索必须装 analysis-ik 分词器（版本需与 ES 一致）
+es:
+  url: http://192.168.25.100:9200

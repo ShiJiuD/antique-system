@@ -11,8 +11,10 @@ import com.antique.mapper.AntiqueMapper;
 import com.antique.mapper.OrderItemMapper;
 import com.antique.mapper.OrderMapper;
 import com.antique.mq.BehaviorEventPublisher;
-import com.antique.service.MessageService;
+import com.antique.mq.OrderEvent;
+import com.antique.service.EsSyncService;
 import com.antique.service.OrderService;
+import com.antique.service.OutboxService;
 import com.antique.util.OrderNoGenerator;
 import com.antique.util.OrderVoAssembler;
 import com.antique.util.PageUtil;
@@ -70,8 +72,17 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Orders> implement
     private final AntiqueMapper antiqueMapper;
     private final OrderItemMapper orderItemMapper;
     private final RDelayedQueue<Long> orderDelayQueue;
-    private final MessageService messageService;
     private final BehaviorEventPublisher behaviorEventPublisher;
+    private final EsSyncService esSyncService;
+
+    /**
+     * M3：Outbox —— 订单只负责"把要发生的事件记下来"，不负责"通知谁"
+     *
+     * <p>改造前这里是 {@code MessageService}：下单事务里直接调它写站内信 + 推 WebSocket。
+     * 那样通知逻辑和下单耦合在一起，而且失败只打日志（静默丢消息）。
+     * 现在订单只写一条事件，站内信由 {@code OrderEventConsumer} 消费事件后生成。
+     */
+    private final OutboxService outboxService;
 
     /**
      * 自注入代理：惰性检查需要调用本类事务方法 closeOrderByTimeout，
@@ -173,19 +184,25 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Orders> implement
 
                 // 下单行为埋点（M1 行为流水）：事务提交后才发，避免统计到最终回滚的订单
                 behaviorEventPublisher.publishOrder(userId, dto.getAntiqueId());
+
+                // 藏品状态同步到 ES（M2 搜索）：这里已经在事务提交后，直接同步即可，
+                // 让"已售"立刻反映到搜索结果里（这里不能调 syncAntiqueToEs，见其注释）
+                doSyncAntiqueToEs(dto.getAntiqueId());
             }
         });
 
         log.info("创建订单成功: orderId={}, orderNo={}, totalAmount={}, userId={}, antiqueId={}",
                 order.getId(), order.getOrderNo(), totalAmount, userId, dto.getAntiqueId());
 
-        // ----- 步骤 9：发送订单消息（写库同事务 + WebSocket 推送） -----
-        // 失败不影响下单：消息已落库则推送兜底，落库失败仅记日志（练手项目可接受）
-        try {
-            messageService.sendOrderMessage(userId, order.getOrderNo());
-        } catch (Exception e) {
-            log.warn("订单消息发送失败，不影响下单: orderId={}", order.getId(), e);
-        }
+        // ----- 步骤 9：写入"订单创建"事件（M3 Outbox） -----
+        // 注意这里<b>不是</b>"发消息"，而是"把要发的消息记下来"：
+        // 与订单落库在同一个事务里 —— 事务提交 = 事件一定被记下来了（原子）。
+        // 真正的 MQ 投递由 OutboxRelayTask 每 5 秒扫一次完成，
+        // 所以 MQ 挂了不会让下单失败，事件会堆在 outbox 表里等 MQ 恢复后补发。
+        //
+        // 改造前这里调的是 messageService.sendOrderMessage(...)：
+        // 事务内同步写站内信 + 推 WebSocket，失败只打日志 —— 既拉长事务，又会静默丢消息。
+        outboxService.save(OrderEvent.created(order.getId(), order.getOrderNo(), userId, totalAmount));
 
         return OrderCreateVO.builder()
                 .orderId(order.getId())
@@ -236,7 +253,18 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Orders> implement
             throw new AuthException(MessageConstant.ORDER_PAY_STATUS_ERROR);
         }
 
-        // ----- 步骤 4：移除延迟队列元素（失败仅记日志，不影响结果） -----
+        // ----- 步骤 4：写入"支付成功"事件（M3 Outbox） -----
+        // ⚠️ 与 createOrder 不同：pay() 本身<b>没有</b> @Transactional，
+        //    所以这条事件是独立提交的 —— 极端情况下（条件更新成功、紧接着进程崩溃）
+        //    会出现"订单已支付但没有事件"，影响面仅限少一条站内信，业务状态是对的。
+        //
+        //    要做到严格原子，需要把"条件更新 + 写事件"抽成一个 @Transactional 方法、
+        //    再用 self 调用（避免自调用绕过代理）；但 pay() 里还有一处
+        //    self.closeOrderByTimeout()，加上外层事务后它会被一起回滚，
+        //    得先把它改成 REQUIRES_NEW。这个改动要实测，留作 TODO，不在这里盲改。
+        outboxService.save(OrderEvent.paid(orderId, order.getOrderNo(), userId, order.getTotalAmount()));
+
+        // ----- 步骤 5：移除延迟队列元素（失败仅记日志，不影响结果） -----
         try {
             orderDelayQueue.remove(orderId);
         } catch (Exception e) {
@@ -279,8 +307,17 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Orders> implement
             throw new AuthException(MessageConstant.ORDER_CANCEL_ONLY_UNPAID);
         }
 
+        // ----- 写入"订单关闭"事件（M3 Outbox，与订单状态同事务） -----
+        // 放在条件更新成功之后：并发下只有一个请求能让 rows>0，所以事件不会重复写
+        // （万一重复了，outbox.event_id 唯一索引 + 消费端幂等也能兜住）
+        outboxService.save(OrderEvent.closed(orderId, order.getOrderNo(), userId, order.getTotalAmount()));
+
         // ----- 回滚藏品（幂等：仅回滚锁定态且无其他有效订单的藏品） -----
-        antiqueMapper.releaseAntique(getAntiqueIdByOrderId(orderId));
+        Long releasedAntiqueId = getAntiqueIdByOrderId(orderId);
+        antiqueMapper.releaseAntique(releasedAntiqueId);
+
+        // 回滚后藏品重新在售，同步到 ES（有事务则延后到提交后执行）
+        syncAntiqueToEs(releasedAntiqueId);
 
         // ----- 移除延迟队列元素 -----
         try {
@@ -322,6 +359,9 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Orders> implement
             int closed = baseMapper.closeOverdueByUser(userId);
             if (closed > 0) {
                 antiqueMapper.batchReleaseByUser(userId);
+                // 批量回滚一次影响多件藏品、拿不到具体 ID，ES 同步交给 EsSyncTask 定时兜底
+                // （该 SQL 里已更新 updated_time，所以定时任务能扫到这些藏品）
+                log.info("超时批量回滚藏品完成，ES 同步交由定时任务兜底: userId={}, closed={}", userId, closed);
             }
         } catch (Exception e) {
             log.warn("惰性超时取消失败: userId={}, error={}", userId, e.getMessage());
@@ -421,8 +461,13 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Orders> implement
 
     /**
      * 确认收货（待收货 → 已完成）
+     *
+     * <p>M3 起补上 {@code @Transactional}：把"状态更新"和"写 outbox 事件"放进同一个事务，
+     * 保证不会出现"收货成功却没有事件"。
+     * <p>本方法内部没有远程调用（Redis / HTTP），加事务不会拉长锁持有时间。
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void receive(Long userId, Long orderId) {
         Orders order = getOwnedOrder(userId, orderId);
         if (order.getStatus() != 2) {
@@ -438,6 +483,10 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Orders> implement
         if (rows == 0) {
             throw new AuthException(MessageConstant.ORDER_RECEIVE_STATUS_ERROR);
         }
+
+        // ----- 写入"订单收货"事件（M3 Outbox，与订单状态同事务） -----
+        outboxService.save(OrderEvent.received(orderId, order.getOrderNo(), userId, order.getTotalAmount()));
+
         log.info("订单确认收货成功: orderId={}, userId={}", orderId, userId);
     }
 
@@ -489,8 +538,17 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Orders> implement
             return;
         }
 
+        // ----- 写入"订单关闭"事件（M3 Outbox，与订单状态同事务） -----
+        // 只有真正完成了状态流转（rows > 0）才写事件；
+        // 上面幂等退出的分支不会走到这里，避免重复通知。
+        outboxService.save(OrderEvent.closed(orderId, order.getOrderNo(), order.getUserId(), order.getTotalAmount()));
+
         // ----- 幂等回滚藏品（仅回滚锁定态且无其他有效订单的藏品） -----
-        antiqueMapper.releaseAntique(getAntiqueIdByOrderId(orderId));
+        Long releasedAntiqueId = getAntiqueIdByOrderId(orderId);
+        antiqueMapper.releaseAntique(releasedAntiqueId);
+
+        // 回滚后藏品重新在售，同步到 ES（有事务则延后到提交后执行）
+        syncAntiqueToEs(releasedAntiqueId);
 
         // ----- 移除延迟队列元素（失败仅记日志） -----
         try {
@@ -505,6 +563,43 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Orders> implement
     // ========================================================================
     //  私有工具方法
     // ========================================================================
+
+    /**
+     * 把藏品状态同步到 ES（M2 搜索）
+     *
+     * <p>为什么要判断事务：如果在事务里直接发 HTTP 调 ES，有两个问题 ——
+     * 一是拉长事务持有数据库连接的时间，二是万一事务回滚，ES 里已经写进了错误状态。
+     * 所以有事务时注册到 {@code afterCommit}，事务提交成功才同步。
+     *
+     * <p>⚠️ {@code afterCommit} 回调内部<b>不能</b>再调本方法（那时再注册的同步不会被执行），
+     * 那种位置要直接调 {@link #doSyncAntiqueToEs}。
+     */
+    private void syncAntiqueToEs(Long antiqueId) {
+        if (antiqueId == null) {
+            return;
+        }
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    doSyncAntiqueToEs(antiqueId);
+                }
+            });
+        } else {
+            doSyncAntiqueToEs(antiqueId);
+        }
+    }
+
+    /**
+     * 立即同步藏品到 ES；失败只记警告，不影响主流程（漏掉的由 EsSyncTask 定时兜底）
+     */
+    private void doSyncAntiqueToEs(Long antiqueId) {
+        try {
+            esSyncService.syncOne(antiqueId);
+        } catch (Exception e) {
+            log.warn("藏品状态同步到 ES 失败（将由定时任务兜底）: antiqueId={}", antiqueId, e);
+        }
+    }
 
     /**
      * 查询当前用户订单，查不到或不属于该用户一律返回"订单不存在"

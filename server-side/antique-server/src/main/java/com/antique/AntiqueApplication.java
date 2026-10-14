@@ -3,6 +3,7 @@ package com.antique;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.cloud.openfeign.EnableFeignClients;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
@@ -27,6 +28,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @SpringBootApplication
 @EnableScheduling  // 开启定时任务（订单超时关单兜底）
 @MapperScan("com.antique.mapper")  // 扫描 MyBatis Mapper 接口
+@EnableFeignClients  // M5：扫描 com.antique 下的 @FeignClient 接口，生成远程调用代理
 public class AntiqueApplication {
 
     public static void main(String[] args) {

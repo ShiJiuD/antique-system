@@ -76,4 +76,12 @@ public class AntiqueDetailVO implements Serializable {
 
     /** 当前用户是否已收藏（未登录时恒为 false） */
     private Boolean isFavorited;
+
+    /**
+     * 相关藏品推荐（M5：由独立的搜索服务提供，主服务通过 Feign 获取）
+     *
+     * <p>取不到时是空列表 —— 相关推荐是附加信息，搜索服务挂了不该让详情页打不开。
+     * 其他接口不返回这个字段（列表、收藏列表里它是 null）。
+     */
+    private List<AntiqueCardVO> relatedList;
 }

@@ -1,18 +1,14 @@
 package com.antique.service.impl;
 
+import com.antique.client.AlgorithmFeignClient;
 import com.antique.entity.DailyStats;
 import com.antique.mapper.DailyStatsMapper;
 import com.antique.service.StatsService;
 import com.antique.vo.DailyStatsVO;
 import com.fasterxml.jackson.databind.JsonNode;
-import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.MediaType;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestClient;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -36,9 +32,15 @@ import java.util.stream.Collectors;
  *   DailyStatsVO 一起返回给前端/运营
  * </pre>
  *
+ * <h3>M5 改造：RestClient → OpenFeign</h3>
+ * <p>超时从本类的 {@code @PostConstruct} 搬到 application.yml：
+ * <pre>
+ *   spring.cloud.openfeign.client.config.algorithm-service.readTimeout: 3000
+ * </pre>
+ *
  * <h3>降级策略</h3>
- * <p>预测服务没启动、超时或返回异常时，只记警告并返回 {predictAvailable:false} ——
- * 统计查询本身照常可用。与 ai-side 的处理方式保持一致：<b>外部服务故障不影响主流程</b>。
+ * <p>预测服务没启动、超时或返回异常时，只记警告并返回 {@code predictAvailable:false} ——
+ * 统计查询本身照常可用。与 ai-side 的处理方式一致：<b>外部服务故障不影响主流程</b>。
  */
 @Slf4j
 @Service
@@ -47,24 +49,8 @@ public class StatsServiceImpl implements StatsService {
 
     private final DailyStatsMapper dailyStatsMapper;
 
-    /** algorithm-side 地址（application.yml 的 algorithm.python.url） */
-    @Value("${algorithm.python.url:http://127.0.0.1:8002}")
-    private String algorithmUrl;
-
-    /** HTTP 客户端（本地服务，3 秒足够） */
-    private RestClient restClient;
-
-    @PostConstruct
-    public void init() {
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(3000);
-        factory.setReadTimeout(3000);
-        this.restClient = RestClient.builder()
-                .baseUrl(algorithmUrl)
-                .requestFactory(factory)
-                .build();
-        log.info("销量预测服务已初始化, Python 地址: {}", algorithmUrl);
-    }
+    /** M5：Feign 客户端（本地预测服务，3 秒超时） */
+    private final AlgorithmFeignClient algorithmFeignClient;
 
     @Override
     public DailyStatsVO getDailyWithPrediction(Long antiqueId, int days) {
@@ -98,12 +84,7 @@ public class StatsServiceImpl implements StatsService {
             body.put("historyVisit", historyVisit);
             body.put("historyOrder", historyOrder);
 
-            JsonNode resp = restClient.post()
-                    .uri("/predict")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(body)
-                    .retrieve()
-                    .body(JsonNode.class);
+            JsonNode resp = algorithmFeignClient.predict(body);
 
             if (resp != null && resp.path("code").asInt() == 1) {
                 predictVisit = toIntList(resp.path("data").path("predict_visit"));
@@ -113,6 +94,7 @@ public class StatsServiceImpl implements StatsService {
                 log.warn("预测服务返回异常: antiqueId={}, resp={}", antiqueId, resp);
             }
         } catch (Exception e) {
+            // 预测服务未启动 / 超时 / Feign 异常 → 降级，只返回历史统计
             log.warn("调用预测服务失败（已降级，仅返回历史统计）: antiqueId={}, error={}", antiqueId, e.getMessage());
         }
 

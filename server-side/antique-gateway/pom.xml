@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.antique</groupId>
+        <artifactId>antique-api</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>antique-gateway</artifactId>
+    <packaging>jar</packaging>
+    <name>Antique — 网关（M5）</name>
+
+    <!--
+        ⚠️ 网关的依赖必须"干净"，两个坑：
+
+        ① 绝对不能引 spring-boot-starter-web
+           Spring Cloud Gateway 基于 WebFlux（响应式），而 starter-web 会把
+           Spring MVC + Tomcat 拉进来。两者同时存在时应用直接启动失败：
+           "Spring MVC found on classpath, which is incompatible with Spring Cloud Gateway"
+
+        ② 因此也不能依赖 antique-pojo
+           pojo 里有 knife4j（springdoc-webmvc），会间接把 servlet 那套带进来。
+           网关只做"转发"，不需要任何业务模型 —— 所以它连内部模块都不依赖。
+    -->
+    <dependencies>
+        <!-- Gateway 本体（内含 WebFlux、Netty，不含 Tomcat） -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-gateway</artifactId>
+        </dependency>
+
+        <!-- Nacos 服务发现：路由目标是 lb://服务名，靠它解析出实例地址 -->
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>
+        </dependency>
+
+        <!-- 负载均衡器：lb:// 协议由它负责"从实例列表里挑一个" -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-loadbalancer</artifactId>
+        </dependency>
+
+        <!--
+            Redis 客户端（M5·C4 统一鉴权用）
+            ★ 必须是响应式：网关跑在 Netty 事件循环线程上，阻塞式客户端会占住事件循环线程，
+              几个慢请求就能让整个网关停止响应。
+
+            ⚠️ 这里没有用 spring-boot-starter-data-redis-reactive，而是直接依赖
+              spring-data-redis + lettuce-core，两者效果等价：
+              · ReactiveStringRedisTemplate / ReactiveRedisConnectionFactory 都在 spring-data-redis 里
+              · Boot 的 RedisReactiveAutoConfiguration 只要求 classpath 上有
+                ReactiveRedisOperations（靠 @ConditionalOnClass 判断），并不检查是不是 starter
+              所以响应式模板照样会被自动装配出来。
+
+            这样写的原因：本机 Maven 本地仓库（在工作区之外、当前只读）里没有那个 starter 的 pom，
+            下载不了；直接依赖已有的两个 jar 可以完全离线编译。
+            如果哪天能联网下载，换回 starter 更省心（这段说明也可以一并删掉）。
+        -->
+        <dependency>
+            <groupId>org.springframework.data</groupId>
+            <artifactId>spring-data-redis</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.lettuce</groupId>
+            <artifactId>lettuce-core</artifactId>
+        </dependency>
+        <!--
+            这里<b>故意不引</b> commons-pool2（Lettuce 的连接池）：
+            · 它是可选的 —— 没有它时 Lettuce 用单连接多路复用（线程安全），
+              网关只是查 token 这种轻量操作，够用；
+            · 引入它会走 Spring Boot BOM 管理的 2.12.0，而本地仓库只有 2.8.1，同样下载不到。
+            什么时候该加回来：需要限制并发连接数、或 Redis 命令耗时差异很大需要多连接时。
+        -->
+
+        <!--
+            Hutool：解析 Redis 里存的用户 JSON
+            网关本来想保持"零业务依赖"，但 token 对应的值是 JSON，
+            用 Hutool 的 JSONUtil 解析与项目其他模块写法一致；Jackson 的 readTree 会抛受检异常，
+            在响应式 lambda 里写起来很别扭。
+        -->
+        <dependency>
+            <groupId>cn.hutool</groupId>
+            <artifactId>hutool-all</artifactId>
+        </dependency>
+
+        <!-- Lombok -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

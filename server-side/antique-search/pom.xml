@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.antique</groupId>
+        <artifactId>antique-api</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>antique-search</artifactId>
+    <packaging>jar</packaging>
+    <name>Antique — 搜索服务（M5 拆分）</name>
+
+    <!--
+        这个模块的依赖刻意保持"轻"：
+        只需要 ES + 注册中心，不需要 MySQL / Redis / RabbitMQ。
+
+        这正是把它拆出来的第一条理由 —— 依赖不同，故障域和扩缩容边界才清晰：
+        主服务挂了下单不能做；搜索服务挂了，用户还能浏览和下单（M2 已经做了降级）。
+    -->
+    <dependencies>
+        <!-- 内部模块：复用 Result / PageUtil / EsConstants / 卡片 VO -->
+        <dependency>
+            <groupId>com.antique</groupId>
+            <artifactId>antique-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.antique</groupId>
+            <artifactId>antique-pojo</artifactId>
+        </dependency>
+
+        <!-- Web：提供 REST 接口；RestClient 也来自这里（spring-web） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- Nacos 服务注册与发现（M5） -->
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>
+        </dependency>
+
+        <!-- Lombok -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- 热部署（开发用） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-devtools</artifactId>
+            <scope>runtime</scope>
+            <optional>true</optional>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

@@ -3,7 +3,6 @@ package com.antique.config;
 import com.antique.interceptor.TokenInterceptor;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
@@ -40,6 +39,22 @@ public class WebMvcConfiguration implements WebMvcConfigurer {
      * <p>/api/ws（WebSocket 握手）不走本拦截器：浏览器无法自定义请求头，
      * 由 WebSocket 握手拦截器通过 query 参数 token 自行校验。
      */
+    /**
+     * CORS 跨域 —— M5 起<b>已移除</b>，统一挪到网关
+     *
+     * <h3>为什么删掉</h3>
+     * <p>改造前这里 {@code allowedOriginPatterns("*")} 全开跨域：
+     * <ul>
+     *   <li>每加一个服务都要各配一份，容易配得不一致（主服务、搜索服务、网关都要配）</li>
+     *   <li>开发期"全开"没问题，但生产环境要收紧时，分散在多处很难逐一改对</li>
+     * </ul>
+     *
+     * <p>现在所有请求都从网关进入，跨域只配在
+     * {@code antique-gateway} 的 {@code spring.cloud.gateway.globalcors}。
+     *
+     * <p>⚠️ 副作用：<b>浏览器直连 {@code localhost:8080} 会被同源策略拦</b>。
+     * 本地调试要么走网关 {@code localhost:9000}，要么用 Postman/curl（不受同源策略限制）。
+     */
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(tokenInterceptor)
@@ -48,18 +63,5 @@ public class WebMvcConfiguration implements WebMvcConfigurer {
                         "/api/auth/**",                   // 登录/验证码接口无需认证
                         WebSocketConfig.WS_ENDPOINT       // WebSocket 握手自行鉴权
                 );
-    }
-
-    /**
-     * 配置 CORS 跨域（开发环境全开）
-     */
-    @Override
-    public void addCorsMappings(CorsRegistry registry) {
-        registry.addMapping("/**")                        // 所有路径
-                .allowedOriginPatterns("*")               // 允许所有来源
-                .allowedMethods("*")                      // 允许所有 HTTP 方法
-                .allowedHeaders("*")                      // 允许所有请求头
-                .allowCredentials(true)                   // 允许携带 Cookie
-                .maxAge(3600);                            // 预检请求缓存 1 小时
     }
 }

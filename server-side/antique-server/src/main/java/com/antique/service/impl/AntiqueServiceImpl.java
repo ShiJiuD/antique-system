@@ -5,10 +5,12 @@ import cn.hutool.json.JSONUtil;
 import com.antique.constant.MessageConstant;
 import com.antique.entity.Antique;
 import com.antique.entity.Favorite;
+import com.antique.client.SearchFeignClient;
 import com.antique.exception.AuthException;
 import com.antique.mapper.AntiqueMapper;
 import com.antique.mapper.FavoriteMapper;
 import com.antique.mq.BehaviorEventPublisher;
+import com.antique.result.Result;
 import com.antique.service.AntiqueService;
 import com.antique.util.PageUtil;
 import com.antique.vo.AntiqueCardVO;
@@ -50,6 +52,12 @@ public class AntiqueServiceImpl extends ServiceImpl<AntiqueMapper, Antique> impl
     private final AntiqueMapper antiqueMapper;
     private final FavoriteMapper favoriteMapper;
     private final BehaviorEventPublisher behaviorEventPublisher;
+
+    /** M5：搜索服务（Feign）—— 搜索转调和详情页相关推荐都走它，主服务不再直连 ES */
+    private final SearchFeignClient searchFeignClient;
+
+    /** 详情页展示的相关藏品条数 */
+    private static final int RELATED_SIZE = 4;
 
     // ========================================================================
     //  接口 1：获取藏品列表
@@ -130,8 +138,38 @@ public class AntiqueServiceImpl extends ServiceImpl<AntiqueMapper, Antique> impl
         AntiqueDetailVO vo = BeanUtil.copyProperties(antique, AntiqueDetailVO.class);
         vo.setImages(parseImages(antique.getImages()));
         vo.setIsFavorited(isFavorited);
+
+        // ----- 步骤 5：相关推荐（M5：Feign 调用独立的搜索服务）-----
+        vo.setRelatedList(loadRelatedAntiques(id));
+
         log.info("藏品详情查询完成: id={}, 是否已收藏: {}", id, isFavorited);
         return vo;
+    }
+
+    /**
+     * 取相关藏品 —— M5 的服务间调用
+     *
+     * <p>这是主服务<b>必须</b>问搜索服务的场景：判断"哪些藏品相关"要读 ES，
+     * 而 M5 拆分的目的之一就是把 ES 依赖从主服务隔离出去，所以主服务自己查不了。
+     *
+     * <p>整段包在 try-catch 里是有意的：相关推荐是<b>附加信息</b>，
+     * 搜索服务没启动 / 注册不到 / 超时，都不该让用户连详情页都打不开 ——
+     * 拿不到就返回空列表，页面照常显示。这和 M1 里"预测服务挂了返回 predictAvailable=false"是同一个降级思路。
+     */
+    private List<AntiqueCardVO> loadRelatedAntiques(Long antiqueId) {
+        try {
+            Result<List<AntiqueCardVO>> result = searchFeignClient.findRelated(antiqueId, RELATED_SIZE);
+
+            // Feign 只负责发 HTTP 和反序列化，对方返回 code=0 它也不会抛异常，所以要自己判
+            if (result == null || result.getCode() == null || result.getCode() != 1 || result.getData() == null) {
+                log.warn("相关推荐返回异常，降级为空列表: antiqueId={}, result={}", antiqueId, result);
+                return new ArrayList<>();
+            }
+            return result.getData();
+        } catch (Exception e) {
+            log.warn("调用搜索服务失败，相关推荐降级为空列表: antiqueId={}", antiqueId, e);
+            return new ArrayList<>();
+        }
     }
 
     // ========================================================================
@@ -139,8 +177,14 @@ public class AntiqueServiceImpl extends ServiceImpl<AntiqueMapper, Antique> impl
     // ========================================================================
 
     /**
-     * 搜索藏品（按名称模糊匹配，返回卡片字段）
-     * <p>关键词为空白直接抛业务异常；可选 categoryId 分类内搜索。
+     * 搜索藏品 —— M5：改为调用独立的搜索服务（Feign）
+     *
+     * <p>链路：主服务 →（Feign + Nacos 服务发现）→ 搜索服务 → ES。
+     * 主服务<b>不再直接连 ES</b>，这正是把搜索拆出去的意义：ES 依赖只存在于搜索服务里。
+     *
+     * <p>搜索服务不可用（没启动、Nacos 里注册不上、调用超时）时降级回 MySQL 的 LIKE 查询，
+     * 保证"搜索服务挂了搜索功能不会整体不可用"。
+     * 改造前的 MySQL 实现完整保留在 {@link #searchByMysql}，既是降级路径，也是效果对比的参照。
      */
     @Override
     public PageResultVO<AntiqueCardVO> search(String keyword, Long categoryId, Integer page, Integer size) {
@@ -150,7 +194,31 @@ public class AntiqueServiceImpl extends ServiceImpl<AntiqueMapper, Antique> impl
             throw new AuthException(MessageConstant.SEARCH_KEYWORD_EMPTY);
         }
 
-        // ----- 步骤 2：分页参数归一化 -----
+        // ----- 步骤 2：主路径 —— Feign 调搜索服务 -----
+        try {
+            Result<PageResultVO<AntiqueCardVO>> result =
+                    searchFeignClient.searchAntique(keyword.trim(), categoryId, page, size);
+
+            // Feign 不会因为对方业务失败（code=0）就抛异常，所以必须自己检查 code
+            if (result == null || result.getCode() == null || result.getCode() != 1 || result.getData() == null) {
+                throw new IllegalStateException("搜索服务返回异常: " + result);
+            }
+            return result.getData();
+        } catch (Exception e) {
+            log.warn("搜索服务调用失败，降级为 MySQL 模糊查询: keyword={}, categoryId={}", keyword, categoryId, e);
+            return searchByMysql(keyword, categoryId, page, size);
+        }
+    }
+
+    /**
+     * 搜索藏品（改造前的 MySQL 实现）—— ES 不可用时的降级路径
+     *
+     * <p>按名称 LIKE 模糊匹配：不支持分词、相关性排序与高亮，
+     * 命中率低于 ES（例如搜"青花瓷瓶"才匹配得上，搜"青花瓷"匹配不到），
+     * 但胜在不依赖外部服务，作为兜底仍然可用。
+     */
+    private PageResultVO<AntiqueCardVO> searchByMysql(String keyword, Long categoryId, Integer page, Integer size) {
+        // ----- 分页参数归一化 -----
         page = PageUtil.normalizePage(page);
         size = PageUtil.normalizeSize(size);
 

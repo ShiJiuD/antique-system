@@ -21,6 +21,12 @@
         <module>antique-common</module>
         <module>antique-pojo</module>
         <module>antique-server</module>
+        <!-- M5：把搜索能力拆成独立服务
+             理由：它依赖 ES（技术栈异构）、读多写少（负载特征不同）、
+             且挂掉不该影响下单（故障隔离）—— 不是"为了微服务而拆" -->
+        <module>antique-search</module>
+        <!-- M5：网关 —— 前端只连它，由它按路径把请求分发到各服务（统一入口） -->
+        <module>antique-gateway</module>
     </modules>
 
     <!-- ========== 所有版本号统一在这里 ========== -->
@@ -33,6 +39,12 @@
         <lombok.version>1.18.46</lombok.version>
         <hutool.version>5.8.26</hutool.version>
         <redisson.version>3.25.2</redisson.version>
+        <!-- ===== M5 微服务：Spring Cloud / Spring Cloud Alibaba =====
+             版本对应关系见官方表：https://sca.aliyun.com/docs/2023/overview/version-explain/
+               SCA 2023.0.1.0 → Spring Cloud 2023.0.1 → Spring Boot 3.2.4（3.2.x 均可）
+             它适配的 Nacos 服务端版本是 2.3.2，与本项目虚拟机上的 Nacos 完全一致 -->
+        <spring-cloud.version>2023.0.1</spring-cloud.version>
+        <spring-cloud-alibaba.version>2023.0.1.0</spring-cloud-alibaba.version>
         <maven.compiler.source>${java.version}</maven.compiler.source>
         <maven.compiler.target>${java.version}</maven.compiler.target>
         <maven.compiler.encoding>UTF-8</maven.compiler.encoding>
@@ -49,6 +61,23 @@
     <!-- ========== 统一管理所有依赖版本，子模块不用写 version ========== -->
     <dependencyManagement>
         <dependencies>
+            <!-- ===== Spring Cloud / Spring Cloud Alibaba BOM（M5 微服务）=====
+                 用 BOM 统一管理这一整套依赖的版本，子模块只写 artifactId 不写 version -->
+            <dependency>
+                <groupId>org.springframework.cloud</groupId>
+                <artifactId>spring-cloud-dependencies</artifactId>
+                <version>${spring-cloud.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>com.alibaba.cloud</groupId>
+                <artifactId>spring-cloud-alibaba-dependencies</artifactId>
+                <version>${spring-cloud-alibaba.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
             <!-- 内部模块 -->
             <dependency>
                 <groupId>com.antique</groupId>

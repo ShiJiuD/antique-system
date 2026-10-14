@@ -2,6 +2,7 @@ package com.antique.interceptor;
 
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import com.antique.constant.AuthConstant;
 import com.antique.constant.MessageConstant;
 import com.antique.context.UserContext;
 import jakarta.servlet.http.HttpServletRequest;
@@ -12,6 +13,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.util.AntPathMatcher;
 import org.springframework.util.PathMatcher;
+import org.springframework.util.StringUtils;
 import org.springframework.web.servlet.HandlerInterceptor;
 
 import java.util.concurrent.TimeUnit;
@@ -79,8 +81,31 @@ public class TokenInterceptor implements HandlerInterceptor {
         // 当前请求是否为可选认证路径（公开接口）
         boolean optionalAuth = isOptionalAuthPath(request.getRequestURI());
 
+        // ====== 步骤 0（M5·C4 新增）：优先使用网关注入的身份 ======
+        // 走网关的请求，token 已经由网关的 AuthGlobalFilter 校验过，
+        // 并把 userId 放进了 user-info 请求头 —— 这里直接读，省掉一次 Redis 查询。
+        //
+        // 没有这个头说明是"直连服务"（本地调试、内部调用、WebSocket 之外的旁路），
+        // 那就继续走下面的原有逻辑自己查 Redis —— 两种情况都安全，不会因为少了网关就裸奔。
+        //
+        // ⚠️ 前提：业务服务端口不对外暴露（否则可以在外面伪造 user-info 绕过鉴权），
+        //    详见 AuthConstant 的说明。
+        String gatewayUserId = request.getHeader(AuthConstant.HEADER_USER_ID);
+        if (StringUtils.hasText(gatewayUserId)) {
+            try {
+                Long userId = Long.valueOf(gatewayUserId.trim());
+                String phone = request.getHeader(AuthConstant.HEADER_USER_PHONE);
+                UserContext.set(userId, StringUtils.hasText(phone) ? phone : null);
+                return true;
+            } catch (NumberFormatException e) {
+                // 头被伪造或格式不对 → 忽略它，继续走本地校验
+                // （注意：不能因为"这个头坏了"就放行，也不能直接拒绝，降级到查 Redis 最稳）
+                log.warn("网关注入的 user-info 非法，改用本地 Redis 校验: value={}", gatewayUserId);
+            }
+        }
+
         // ====== 步骤 1：提取 Token ======
-        String authHeader = request.getHeader("Authorization");
+        String authHeader = request.getHeader(AuthConstant.HEADER_AUTH);
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
             // 可选认证路径：无 Token 则匿名放行（UserContext 不设置，getUserId() 返回 null）
             if (optionalAuth) {

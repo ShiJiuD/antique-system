@@ -80,7 +80,7 @@ public interface AntiqueMapper extends BaseMapper<Antique> {
      * @param id 藏品 ID
      * @return 受影响行数，0 表示藏品已非在售状态（已被锁定或下架）
      */
-    @Update("UPDATE antique SET status = 2 WHERE id = #{id} AND status = 1")
+    @Update("UPDATE antique SET status = 2, updated_time = NOW() WHERE id = #{id} AND status = 1")
     int lockAntique(Long id);
 
     /**
@@ -95,7 +95,7 @@ public interface AntiqueMapper extends BaseMapper<Antique> {
      * @param id 藏品 ID
      * @return 受影响行数，0 表示无需回滚（已被并发处理）
      */
-    @Update("UPDATE antique SET status = 1 " +
+    @Update("UPDATE antique SET status = 1, updated_time = NOW() " +
             "WHERE id = #{id} AND status = 2 " +
             "AND NOT EXISTS (" +
             "  SELECT 1 FROM order_items i INNER JOIN orders o ON o.id = i.order_id " +
@@ -111,7 +111,7 @@ public interface AntiqueMapper extends BaseMapper<Antique> {
      * @param userId 买家用户 ID
      * @return 受影响行数
      */
-    @Update("UPDATE antique SET status = 1 " +
+    @Update("UPDATE antique SET status = 1, updated_time = NOW() " +
             "WHERE status = 2 AND id IN (" +
             "  SELECT i.antique_id FROM order_items i INNER JOIN orders o ON o.id = i.order_id " +
             "  WHERE o.user_id = #{userId} AND o.status = 4 AND o.cancel_type = 2) " +
